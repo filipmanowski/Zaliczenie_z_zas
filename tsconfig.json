@@ -1,0 +1,26 @@
+{
+  // Visit https://aka.ms/tsconfig to read more about this file
+  "compilerOptions": {
+    
+    "module": "esnext",
+    "target": "es2020",
+    "types": [],
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "lib": ["ES2020","DOM", "DOM.Iterable"],
+
+    "moduleResolution": "bundler",
+
+    // Stricter Typechecking Options
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+
+   
+    // Recommended Options
+    "strict": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true,
+  },
+  "include": ["src"]
+}
