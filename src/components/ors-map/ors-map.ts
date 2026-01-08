@@ -4,10 +4,12 @@ import { notificationRenderer } from "@vaadin/notification/lit.js";
 import L, { LeafletMouseEvent } from "leaflet";
 import { LitElement, css, html, render } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-// Using native CustomEvent bubbling instead of centralized eventBus
 import { OrsApi } from "../../ors-api/ors-api";
+import { MapIsochronesLayer } from "../../map/map-isochrones-layer";
+
 import "../ors-custom-contextmenu";
 import "../ors-progress-bar";
+
 import markerIconGreen from "./assets/img/marker-icon-green.png";
 import markerIconRed from "./assets/img/marker-icon-red.png";
 
@@ -15,23 +17,30 @@ import markerIconRed from "./assets/img/marker-icon-red.png";
 export class OrsMap extends LitElement {
   @state() map?: L.Map;
   @state() contextMenu?: L.Popup;
-  @state() markerGreen?: L.Marker = new L.Marker([0, 0], {
+
+  @state() markerGreen: L.Marker = new L.Marker([0, 0], {
     opacity: 0,
     draggable: true,
   });
-  @state() markerRed?: L.Marker = new L.Marker([0, 0], {
+
+  @state() markerRed: L.Marker = new L.Marker([0, 0], {
     opacity: 0,
     draggable: true,
   });
+
   @state() searchMarker: L.Marker = new L.Marker([0, 0], {
     opacity: 0,
   });
+
   @state() currentLatLng?: L.LatLng;
   @state() orsApi: OrsApi = new OrsApi();
+
   @state() routeStartLabel: string = "";
   @state() routeStopLabel: string = "";
   @state() searchLabel: string = "";
-  @state() routeLayer?: L.GeoJSON = new L.GeoJSON();
+
+  @state() routeLayer: L.GeoJSON = new L.GeoJSON();
+  @state() isochronesLayer?: MapIsochronesLayer;
 
   @property({ type: Number }) currentTabIdx: number = 0;
 
@@ -75,7 +84,7 @@ export class OrsMap extends LitElement {
     </vaadin-horizontal-layout>
   `;
 
-  renderNotification = () => {
+  renderNotification = (): void => {
     render(
       html`<vaadin-notification
         class="notification"
@@ -89,9 +98,10 @@ export class OrsMap extends LitElement {
     );
   };
 
-  // connectionError: NotificationLitRenderer = (error) => ;
+  renderConnectionNotification = (error: unknown): void => {
+    const message =
+      error instanceof Error ? error.message : String(error);
 
-  renderConnectionNotification = (error) => {
     render(
       html`<vaadin-notification
         class="notification"
@@ -105,7 +115,7 @@ export class OrsMap extends LitElement {
               theme="spacing"
               style="align-items: center;"
             >
-              <div>${error}</div>
+              <div>${message}</div>
             </vaadin-horizontal-layout>
           `
         )}
@@ -114,67 +124,66 @@ export class OrsMap extends LitElement {
     );
   };
 
-  routeService = async (type?): Promise<void> => {
+  routeService = async (
+    type?: "start" | "end" | "search"
+  ): Promise<void> => {
     if (
-      this.markerGreen!.options.opacity === 1 &&
-      this.markerRed!.options.opacity === 1
+      this.markerGreen.options.opacity === 1 &&
+      this.markerRed.options.opacity === 1
     ) {
-      if (
-        this.markerGreen!.getLatLng().distanceTo(this.markerRed!.getLatLng()) <
-        700000
-      ) {
+      const distance = this.markerGreen
+        .getLatLng()
+        .distanceTo(this.markerRed.getLatLng());
+
+      if (distance < 700000) {
         try {
           const feature = await this.orsApi.route(
-            this.markerGreen!.getLatLng(),
-            this.markerRed!.getLatLng()
+            this.markerGreen.getLatLng(),
+            this.markerRed.getLatLng()
           );
+
           if ((feature as any).error) {
             throw new Error((feature as any).error.message);
           }
 
-          this.routeLayer!.clearLayers().addData(feature as any);
-          render(html``, document.body);
-        } catch (e: any) {
+          this.routeLayer.clearLayers().addData(feature as any);
+        } catch (e: unknown) {
           this.renderConnectionNotification(e);
         }
-      } else if (
-        this.markerGreen!.getLatLng().distanceTo(this.markerRed!.getLatLng()) >=
-        700000
-      ) {
-        this.routeLayer!.clearLayers();
+      } else {
+        this.routeLayer.clearLayers();
         this.renderNotification();
       }
     } else {
-      render(html``, document.body);
+      this.routeLayer.clearLayers();
     }
   };
 
-  updated(changedProperties: Map<string, any>) {
+  updated(changedProperties: Map<string, unknown>) {
     if (changedProperties.has("currentTabIdx")) {
       if (this.currentLatLng) {
         this.updateContextMenu();
       }
-      this.routeLayer?.clearLayers();
-      this.routeStartLabel = ""
+      this.routeLayer.clearLayers();
+      this.routeStartLabel = "";
       this.routeStopLabel = "";
-      this.searchLabel = ""
+      this.searchLabel = "";
     }
-    
   }
 
   updateContextMenu = (): void => {
-    let orsContextMenuContainer = document.createElement("div");
+    const container = document.createElement("div");
 
     render(
       html`<ors-custom-contextmenu
         .currentTabIdx=${this.currentTabIdx}
       ></ors-custom-contextmenu>`,
-      orsContextMenuContainer
+      container
     );
 
     this.contextMenu
       ?.setLatLng(this.currentLatLng!)
-      .bindPopup(orsContextMenuContainer, {
+      .bindPopup(container, {
         closeButton: false,
         minWidth: 250,
       })
@@ -188,47 +197,71 @@ export class OrsMap extends LitElement {
       this.updateContextMenu();
     });
 
-    this.markerGreen!.on("moveend", (e) => {
+    this.markerGreen.on("moveend", (e) => {
       this.currentLatLng = e.target.getLatLng();
-
-      this.dispatchEvent(new CustomEvent("add-marker", { detail: { type: "start" }, bubbles: true, composed: true }));
-      this.routeService();
+      this.dispatchEvent(
+        new CustomEvent("add-marker", {
+          detail: { type: "start" },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      this.routeService("start");
     });
 
-    this.markerRed!.on("moveend", (e) => {
+    this.markerRed.on("moveend", (e) => {
       this.currentLatLng = e.target.getLatLng();
-      this.dispatchEvent(new CustomEvent("add-marker", { detail: { type: "end" }, bubbles: true, composed: true }));
-      this.routeService();
+      this.dispatchEvent(
+        new CustomEvent("add-marker", {
+          detail: { type: "end" },
+          bubbles: true,
+          composed: true,
+        })
+      );
+      this.routeService("end");
     });
 
-    // Register window listeners for bubbling CustomEvents
-    window.addEventListener("add-marker", this._onAddMarker as EventListener);
-    window.addEventListener("add-marker-geocode", this._onAddMarkerGeocode as EventListener);
-    window.addEventListener("hide-marker", this._onHideMarker as EventListener);
+    window.addEventListener(
+      "add-marker",
+      this._onAddMarker as EventListener
+    );
+    window.addEventListener(
+      "add-marker-geocode",
+      this._onAddMarkerGeocode as EventListener
+    );
+    window.addEventListener(
+      "hide-marker",
+      this._onHideMarker as EventListener
+    );
   };
 
-  _onAddMarker = async (e: Event) => {
+  _onAddMarker = async (e: Event): Promise<void> => {
     const data = (e as CustomEvent).detail;
     render(html`<progress-bar-request></progress-bar-request>`, document.body);
 
     switch (data.type) {
       case "start":
-        this.markerGreen?.setOpacity(0);
-
-        this.routeStartLabel = await this.orsApi.reverseGeocode(this.currentLatLng!);
-
-        this.markerGreen!.setLatLng(this.currentLatLng!).setOpacity(1);
+        this.markerGreen.setOpacity(0);
+        this.routeStartLabel = await this.orsApi.reverseGeocode(
+          this.currentLatLng!
+        );
+        this.markerGreen.setLatLng(this.currentLatLng!).setOpacity(1);
         break;
+
       case "end":
-        this.markerRed?.setOpacity(0);
-
-        this.routeStopLabel = await this.orsApi.reverseGeocode(this.currentLatLng!);
-        this.markerRed!.setLatLng(this.currentLatLng!).setOpacity(1);
+        this.markerRed.setOpacity(0);
+        this.routeStopLabel = await this.orsApi.reverseGeocode(
+          this.currentLatLng!
+        );
+        this.markerRed.setLatLng(this.currentLatLng!).setOpacity(1);
         break;
+
       case "search":
-        this.searchMarker?.setOpacity(0);
-        this.searchLabel = await this.orsApi.reverseGeocode(this.currentLatLng!);
-        this.searchMarker!.setLatLng(this.currentLatLng!).setOpacity(1);
+        this.searchMarker.setOpacity(0);
+        this.searchLabel = await this.orsApi.reverseGeocode(
+          this.currentLatLng!
+        );
+        this.searchMarker.setLatLng(this.currentLatLng!).setOpacity(1);
         break;
     }
 
@@ -236,66 +269,80 @@ export class OrsMap extends LitElement {
     this.routeService(data.type);
   };
 
-  _onAddMarkerGeocode = async (e: Event) => {
+  _onAddMarkerGeocode = async (e: Event): Promise<void> => {
     const data = (e as CustomEvent).detail;
-    const coords = new L.LatLng(data.coords[1], data.coords[0])!;
+    const coords = new L.LatLng(data.coords[1], data.coords[0]);
 
     switch (data.type) {
       case "start":
-        this.markerGreen!.setLatLng(coords).setOpacity(1);
+        this.markerGreen.setLatLng(coords).setOpacity(1);
         this.routeStartLabel = data.label;
         break;
       case "end":
-        this.markerRed!.setLatLng(coords).setOpacity(1);
+        this.markerRed.setLatLng(coords).setOpacity(1);
         this.routeStopLabel = data.label;
         break;
       case "search":
-        this.searchMarker!.setLatLng(coords).setOpacity(1);
+        this.searchMarker.setLatLng(coords).setOpacity(1);
         this.searchLabel = data.label;
         break;
     }
+
     this.contextMenu?.close();
     this.routeService(data.type);
   };
 
-  _onHideMarker = async (e: Event) => {
+  _onHideMarker = (e: Event): void => {
     const data = (e as CustomEvent).detail;
+
     switch (data.type) {
       case "start":
-        this.markerGreen!.setOpacity(0);
+        this.markerGreen.setOpacity(0);
         break;
       case "end":
-        this.markerRed!.setOpacity(0);
+        this.markerRed.setOpacity(0);
         break;
       case "search":
-        this.searchMarker!.setOpacity(0);
+        this.searchMarker.setOpacity(0);
         break;
     }
+
     this.contextMenu?.close();
-    this.routeLayer!.clearLayers();
+    this.routeLayer.clearLayers();
   };
 
   disconnectedCallback() {
     super.disconnectedCallback?.();
     window.removeEventListener("add-marker", this._onAddMarker as EventListener);
-    window.removeEventListener("add-marker-geocode", this._onAddMarkerGeocode as EventListener);
-    window.removeEventListener("hide-marker", this._onHideMarker as EventListener);
+    window.removeEventListener(
+      "add-marker-geocode",
+      this._onAddMarkerGeocode as EventListener
+    );
+    window.removeEventListener(
+      "hide-marker",
+      this._onHideMarker as EventListener
+    );
   }
 
-  firstUpdated(props: any) {
-    super.firstUpdated(props);
-
+  firstUpdated( props: Map<PropertyKey, unknown>
+): void {
+  super.firstUpdated(props);
     this.initMap();
-    this.basemap?.addTo(this.map!);
+    this.basemap.addTo(this.map!);
+
     this.contextMenu = new L.Popup();
-    this.routeLayer!.setStyle(this.routeStyle).addTo(this.map!);
-    this.markerGreen?.addTo(this.map!).setIcon(this.startIcon);
-    this.markerRed?.addTo(this.map!).setIcon(this.endIcon);
-    this.searchMarker?.addTo(this.map!).setIcon(this.startIcon);
+
+    this.routeLayer.setStyle(this.routeStyle).addTo(this.map!);
+    this.isochronesLayer = new MapIsochronesLayer(this.map!);
+
+    this.markerGreen.addTo(this.map!).setIcon(this.startIcon);
+    this.markerRed.addTo(this.map!).setIcon(this.endIcon);
+    this.searchMarker.addTo(this.map!).setIcon(this.startIcon);
+
     this.addListeners();
   }
 
-  static styles? = css`
+  static styles = css`
     .notification {
       display: flex !important;
       align-items: center;
