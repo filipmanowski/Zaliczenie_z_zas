@@ -36,9 +36,22 @@ export class OrsCustomContextmenu extends LitElement {
       case 0:
         return html`<p>Contextmenu zakładki Wyszukaj</p>`;
       case 1: return this.routeContextMenu();
-      case 2: return html`Contextmenu zakładki Izochrony`
+      case 2: return html`<button @click=${this._setIsochroneCenter}>
+      Ustaw jako centrum izochron
+    </button>`
     }
   }
+
+  
+  private _setIsochroneCenter() {
+  this.dispatchEvent(
+    new CustomEvent("isochrone-center-set", {
+      bubbles: true,
+      composed: true
+    })
+  );
+}
+
 
   static styles? = css`
     :host {

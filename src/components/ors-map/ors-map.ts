@@ -75,6 +75,11 @@ export class OrsMap extends LitElement {
   private lastIsochroneRequestTime = 0;
   private readonly ISOCHRONE_MIN_INTERVAL = 1000; // 1 sekunda
   private isochroneAbortController?: AbortController;
+  private lastIsochroneParams?: {
+  range: number;
+  interval: number;
+};
+
 
 
   initMap = (): void => {
@@ -244,9 +249,29 @@ export class OrsMap extends LitElement {
   "isochrones-change",
   this._onIsochronesChange as EventListener
 );
+window.addEventListener(
+  "isochrone-center-set",
+  this._onIsochroneCenterSet as EventListener
+);
+
 
 
   };
+_onIsochroneCenterSet = (): void => {
+  this.contextMenu?.close();
+
+  // jeśli użytkownik już ruszał suwakami
+  if (this.currentLatLng && this.lastIsochroneParams) {
+    // symulujemy „zmianę suwaka”
+    this._onIsochronesChange(
+      new CustomEvent("isochrones-change", {
+        detail: this.lastIsochroneParams
+      }) as unknown as Event
+    );
+  }
+};
+
+
 
   _onAddMarker = async (e: Event): Promise<void> => {
     const data = (e as CustomEvent).detail;
@@ -325,7 +350,14 @@ export class OrsMap extends LitElement {
   };
 
 _onIsochronesChange = (e: Event): void => {
+  
   const detail = (e as CustomEvent).detail;
+
+  this.lastIsochroneParams = {
+  range: detail.range,
+  interval: detail.interval
+};
+
 
   if (!this.currentLatLng) return;
 
@@ -392,7 +424,15 @@ _onIsochronesChange = (e: Event): void => {
     window.removeEventListener(
   "isochrones-change",
   this._onIsochronesChange as EventListener
+  
 );
+
+window.removeEventListener(
+  "isochrone-center-set",
+  this._onIsochroneCenterSet as EventListener
+);
+
+
 
   }
 
