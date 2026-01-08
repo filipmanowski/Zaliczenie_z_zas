@@ -62,7 +62,10 @@ export class OrsApi {
   // NEW CODE – ISOCHRONES
   // =====================
 
-  async getIsochrones(req: IsochroneRequest): Promise<any> {
+  async getIsochrones(req: IsochroneRequest,
+        signal?: AbortSignal
+
+  ): Promise<any> {
     const { apiKey } = config;
 
     const profile = req.profile ?? "driving-car";
@@ -77,14 +80,22 @@ export class OrsApi {
       range_type: rangeType
     };
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: apiKey,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body)
-    });
+const fetchOptions: RequestInit = {
+  method: "POST",
+  headers: {
+    Authorization: apiKey,
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify(body)
+};
+
+if (signal) {
+  fetchOptions.signal = signal;
+}
+
+const response = await fetch(url, fetchOptions);
+
+
 
     if (!response.ok) {
       const text = await response.text();

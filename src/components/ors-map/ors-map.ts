@@ -71,6 +71,12 @@ export class OrsMap extends LitElement {
     opacity: 0.65,
   };
 
+  private isochroneDebounceTimer?: number;
+  private lastIsochroneRequestTime = 0;
+  private readonly ISOCHRONE_MIN_INTERVAL = 1000; // 1 sekunda
+  private isochroneAbortController?: AbortController;
+
+
   initMap = (): void => {
     this.map = new L.Map("map", {
       center: new L.LatLng(51.236525, 22.4998601),
@@ -233,6 +239,13 @@ export class OrsMap extends LitElement {
       "hide-marker",
       this._onHideMarker as EventListener
     );
+    
+    window.addEventListener(
+  "isochrones-change",
+  this._onIsochronesChange as EventListener
+);
+
+
   };
 
   _onAddMarker = async (e: Event): Promise<void> => {
@@ -311,6 +324,59 @@ export class OrsMap extends LitElement {
     this.routeLayer.clearLayers();
   };
 
+_onIsochronesChange = (e: Event): void => {
+  const detail = (e as CustomEvent).detail;
+
+  if (!this.currentLatLng) return;
+
+  // debounce
+  if (this.isochroneDebounceTimer) {
+    clearTimeout(this.isochroneDebounceTimer);
+  }
+
+  this.isochroneDebounceTimer = window.setTimeout(async () => {
+    const now = Date.now();
+
+    // hard rate-limit
+    if (now - this.lastIsochroneRequestTime < this.ISOCHRONE_MIN_INTERVAL) {
+      return;
+    }
+
+    this.lastIsochroneRequestTime = now;
+
+    // abort previous request
+    if (this.isochroneAbortController) {
+      this.isochroneAbortController.abort();
+    }
+
+    this.isochroneAbortController = new AbortController();
+
+    try {
+      const data = await this.orsApi.getIsochrones(
+        {
+          location: [
+            this.currentLatLng!.lng,
+            this.currentLatLng!.lat
+          ],
+          range: detail.range,
+          interval: detail.interval
+        },
+        this.isochroneAbortController.signal
+      );
+
+      this.isochronesLayer?.render(data);
+    } catch (err: any) {
+      // ignorujemy abort
+      if (err.name !== "AbortError") {
+        this.renderConnectionNotification(err);
+      }
+    }
+  }, 600); // debounce 600 ms
+};
+
+
+
+
   disconnectedCallback() {
     super.disconnectedCallback?.();
     window.removeEventListener("add-marker", this._onAddMarker as EventListener);
@@ -322,6 +388,12 @@ export class OrsMap extends LitElement {
       "hide-marker",
       this._onHideMarker as EventListener
     );
+
+    window.removeEventListener(
+  "isochrones-change",
+  this._onIsochronesChange as EventListener
+);
+
   }
 
   firstUpdated( props: Map<PropertyKey, unknown>
