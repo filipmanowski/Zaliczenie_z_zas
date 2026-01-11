@@ -24,6 +24,23 @@ export class OrsApi {
     return json.features[0].properties.label;
   }
 
+  /**
+   * Zwraca pełny Feature z reverse geocodingu (jeśli dostępny).
+   */
+  async reverseGeocodeFeature(point: L.LatLng): Promise<any | null> {
+    const { apiKey, reverseGeocodeUrl } = config;
+    const url: string = `${reverseGeocodeUrl}api_key=${apiKey}&point.lon=${point.lng}&point.lat=${point.lat}`;
+
+    try {
+      const resp = await fetch(url);
+      const json = await resp.json();
+      return json.features && json.features.length ? json.features[0] : null;
+    } catch (err) {
+      console.error('reverseGeocodeFeature error', err);
+      return null;
+    }
+  }
+
   async route(
     startPoint: L.LatLng,
     endPoint: L.LatLng,
@@ -88,10 +105,31 @@ export class OrsApi {
         usedInterval = Math.ceil(req.range / MAX_ISOCHRONES);
       }
 
-      ranges = [];
+      const temp: number[] = [];
       for (let r = usedInterval; r <= req.range; r += usedInterval) {
-        ranges.push(r);
-        if (ranges.length >= MAX_ISOCHRONES) break;
+        temp.push(r);
+        if (temp.length >= MAX_ISOCHRONES) break;
+      }
+
+      // ensure the final requested range is included (e.g. interval=8km, range=11km -> include 8km and 11km)
+      const last = temp.length ? temp[temp.length - 1] : 0;
+      if (last < req.range) {
+        if (temp.length < MAX_ISOCHRONES) {
+          temp.push(req.range);
+        } else {
+          // replace the last entry with the final range so user always sees the outer bound
+          temp[temp.length - 1] = req.range;
+        }
+      }
+
+      // dedupe & sort
+      ranges = Array.from(new Set(temp)).sort((a, b) => a - b);
+      // ensure we don't exceed MAX_ISOCHRONE after adjustments
+      if (ranges.length > MAX_ISOCHRONES) {
+        // keep first (MAX_ISOCHRONES-1) and final range
+        const first = ranges.slice(0, MAX_ISOCHRONES - 1);
+        const final = ranges[ranges.length - 1];
+        ranges = [...first, final];
       }
     } else {
       ranges = [req.range];
@@ -118,10 +156,39 @@ if (signal) {
 
 const response = await fetch(url, fetchOptions);
 
-
-
     if (!response.ok) {
       const text = await response.text();
+
+      // If server error (5xx) and we sent multiple ranges, try a fallback with a single outer range.
+      if (response.status >= 500 && Array.isArray(ranges) && ranges.length > 1) {
+        try {
+          const fallbackBody = {
+            locations: [req.location],
+            range: [ranges[ranges.length - 1]],
+            range_type: rangeType,
+          };
+
+          const fallbackOptions: RequestInit = {
+            method: "POST",
+            headers: {
+              Authorization: apiKey,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(fallbackBody),
+          };
+
+          if (signal) fallbackOptions.signal = signal;
+
+          const fallbackResp = await fetch(url, fallbackOptions);
+          if (fallbackResp.ok) {
+            return fallbackResp.json();
+          }
+          // otherwise continue to throw original error below
+        } catch (fallbackErr) {
+          // ignore fallback error and throw original
+        }
+      }
+
       throw new Error(`ORS Isochrone error: ${response.status} ${text}`);
     }
 

@@ -86,6 +86,7 @@ export class OrsMap extends LitElement {
   rangeType?: string;
   address?: string;
 };
+  private addressDebounceTimer?: number;
 
 
 
@@ -253,9 +254,13 @@ export class OrsMap extends LitElement {
     );
     
     window.addEventListener(
-  "isochrones-change",
+  "isochrones-generate",
   this._onIsochronesChange as EventListener
 );
+    window.addEventListener(
+      "isochrone-address",
+      this._onIsochroneAddress as EventListener
+    );
 window.addEventListener(
   "isochrone-center-set",
   this._onIsochroneCenterSet as EventListener
@@ -272,14 +277,34 @@ _onIsochroneCenterSet = (): void => {
   }
 
   // jeśli użytkownik już ruszał suwakami
-  if (this.currentLatLng && this.lastIsochroneParams) {
-    // symulujemy „zmianę suwaka”
-    this._onIsochronesChange(
-      new CustomEvent("isochrones-change", {
-        detail: this.lastIsochroneParams
-      }) as unknown as Event
-    );
-  }
+  // do not auto-generate here; user must click 'Generuj izochronę'
+};
+
+_onIsochroneAddress = (e: Event): void => {
+  const address = (e as CustomEvent).detail?.address as string;
+
+  if (!address || address.trim().length === 0) return;
+
+  // debounce rapid typing
+  if (this.addressDebounceTimer) clearTimeout(this.addressDebounceTimer);
+
+  this.addressDebounceTimer = window.setTimeout(async () => {
+    try {
+      const feats = await this.orsApi.geocode(address);
+      if (!feats || feats.length === 0) return;
+
+      const coords = feats[0].geometry.coordinates as [number, number];
+      const latlng = new L.LatLng(coords[1], coords[0]);
+
+      this.currentLatLng = latlng;
+      this.isochroneCenterMarker.setLatLng(latlng).setOpacity(1);
+      this.map?.setView(latlng, this.map?.getZoom() ?? 13);
+
+      // do not auto-generate on address change; user must click 'Generuj izochronę'
+    } catch (err: unknown) {
+      this.renderConnectionNotification(err);
+    }
+  }, 600);
 };
 
 
@@ -401,13 +426,30 @@ _onIsochronesChange = (e: Event): void => {
     render(html`<progress-bar-request></progress-bar-request>`, document.body);
 
     try {
-      let centerLatLng: L.LatLng | undefined = this.currentLatLng;
+      // determine center: priority to explicit isochrone center marker if visible,
+      // then address provided in detail (geocode), then this.currentLatLng, then map center
+      let centerLatLng: L.LatLng | undefined;
 
-      if (detail.address) {
+      // use marker position if user set it
+      try {
+        if (
+          this.isochroneCenterMarker &&
+          this.isochroneCenterMarker.options &&
+          this.isochroneCenterMarker.options.opacity === 1
+        ) {
+          centerLatLng = this.isochroneCenterMarker.getLatLng();
+        }
+      } catch (err) {
+        // ignore
+      }
+
+      if (!centerLatLng && detail.address) {
         // geocode address to coordinates
         try {
           const feats = await this.orsApi.geocode(detail.address);
           if (!feats || feats.length === 0) {
+            // clear previous isochrones because center was changed but geocode failed
+            this.isochronesLayer?.clear();
             throw new Error("Nie znaleziono adresu: " + detail.address);
           }
 
@@ -421,16 +463,16 @@ _onIsochronesChange = (e: Event): void => {
         }
       }
 
-      // if still no center, use map center
-      if (!centerLatLng && this.map) {
-        centerLatLng = this.map.getCenter();
-        this.currentLatLng = centerLatLng;
+      // fallback to currentLatLng or map center
+      if (!centerLatLng) {
+        if (this.currentLatLng) centerLatLng = this.currentLatLng;
+        else if (this.map) centerLatLng = this.map.getCenter();
       }
 
       if (!centerLatLng) {
-        this.renderConnectionNotification(
-          new Error("Brak punktu centralnego izochrony")
-        );
+        // nothing to do, clear existing isochrones
+        this.isochronesLayer?.clear();
+        this.renderConnectionNotification(new Error("Brak punktu centralnego izochrony"));
         return;
       }
 
@@ -446,10 +488,59 @@ _onIsochronesChange = (e: Event): void => {
       );
 
       this.isochronesLayer?.render(data);
+
+      // after rendering, try to get reverse geocode feature for center
+      try {
+        const rev = await this.orsApi.reverseGeocodeFeature(centerLatLng);
+        // dispatch address update so panel can fill the field
+        if (rev && rev.properties && rev.properties.label) {
+          window.dispatchEvent(
+            new CustomEvent("isochrone-address-updated", {
+              detail: { label: rev.properties.label },
+              bubbles: true,
+              composed: true,
+            })
+          );
+        }
+
+        // check for locality-like properties
+        const localityKeys = ["locality", "city", "town", "village", "hamlet", "municipality"];
+        let hasLocality = false;
+        if (rev && rev.properties) {
+          for (const k of localityKeys) {
+            if (rev.properties[k]) {
+              hasLocality = true;
+              break;
+            }
+          }
+        }
+
+        if (!hasLocality) {
+          this.renderConnectionNotification(
+            new Error("W miejscu znacznika nie można wskazać dokładnego adresu położenia.")
+          );
+        }
+      } catch (e) {
+        // ignore reverse geocode errors
+      }
     } catch (err: any) {
-      // ignorujemy abort
+      // ignorujemy abort, ale przy innych błędach czyść poprzednie izochrony
       if (err.name !== "AbortError") {
-        this.renderConnectionNotification(err);
+        this.isochronesLayer?.clear();
+
+        const msg = err && err.message ? String(err.message) : "";
+        if (
+          msg.includes("ORS Isochrone error: 500") ||
+          msg.includes("Unable to build an isochrone map")
+        ) {
+          this.renderConnectionNotification(
+            new Error(
+              "W wskazanym miejscu nie ma wytyczonego ludzkiego szlaku/drogi — miejsce położone jest w dziczy."
+            )
+          );
+        } else {
+          this.renderConnectionNotification(err);
+        }
       }
     } finally {
       const overlay = document.querySelector('progress-bar-request');
@@ -476,7 +567,7 @@ _onIsochronesChange = (e: Event): void => {
     );
 
     window.removeEventListener(
-  "isochrones-change",
+  "isochrones-generate",
   this._onIsochronesChange as EventListener
   
 );
@@ -484,6 +575,11 @@ _onIsochronesChange = (e: Event): void => {
 window.removeEventListener(
   "isochrone-center-set",
   this._onIsochroneCenterSet as EventListener
+);
+
+window.removeEventListener(
+  "isochrone-address",
+  this._onIsochroneAddress as EventListener
 );
 
 

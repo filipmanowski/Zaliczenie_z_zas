@@ -11,26 +11,20 @@ export class OrsIsochronesPanel extends LitElement {
   @state() profile: string = "driving-car";
   @state() rangeType: "distance" | "time" = "distance";
   @state() address: string = "";
+  @state() dirty: boolean = false;
 
   private api = new OrsApi();
 
   private emitChange() {
     const detailRange = this.rangeType === "distance" ? this.rawRange * 1000 : this.rawRange * 60; // minutes->seconds
     const detailInterval = this.rangeType === "distance" ? this.rawInterval * 1000 : this.rawInterval * 60;
-
-    this.dispatchEvent(
-      new CustomEvent("isochrones-change", {
-        detail: {
-          range: detailRange,
-          interval: detailInterval,
-          profile: this.profile,
-          rangeType: this.rangeType,
-          address: this.address || undefined,
-        },
-        bubbles: true,
-        composed: true,
-      })
-    );
+    return {
+      range: detailRange,
+      interval: detailInterval,
+      profile: this.profile,
+      rangeType: this.rangeType,
+      address: this.address || undefined,
+    };
   }
 
   private onRangeInput(e: Event) {
@@ -42,17 +36,17 @@ export class OrsIsochronesPanel extends LitElement {
       this.rawInterval = this.rawRange;
     }
 
-    this.emitChange();
+    this.dirty = true;
   }
 
   private onIntervalInput(e: Event) {
     this.rawInterval = Number((e.target as HTMLInputElement).value);
-    this.emitChange();
+    this.dirty = true;
   }
 
   private onProfileChange(e: Event) {
     this.profile = (e.target as HTMLSelectElement).value;
-    this.emitChange();
+    this.dirty = true;
   }
 
   private onRangeTypeChange(e: Event) {
@@ -75,7 +69,7 @@ export class OrsIsochronesPanel extends LitElement {
     const max = this.getMaxRangeForType();
     if (this.rawRange > max) this.rawRange = max;
     if (this.rawInterval > this.rawRange) this.rawInterval = this.rawRange;
-    this.emitChange();
+    this.dirty = true;
   }
 
   private getMaxRangeForType(): number {
@@ -93,11 +87,45 @@ export class OrsIsochronesPanel extends LitElement {
         composed: true,
       })
     );
+    this.dirty = true;
   }
 
+  connectedCallback() {
+    super.connectedCallback?.();
+    window.addEventListener(
+      "isochrone-address-updated",
+      this._onAddressUpdated as EventListener
+    );
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback?.();
+    window.removeEventListener(
+      "isochrone-address-updated",
+      this._onAddressUpdated as EventListener
+    );
+  }
+
+  private _onAddressUpdated = (e: Event): void => {
+    const detail = (e as CustomEvent).detail;
+    if (detail && detail.label) {
+      // set address without re-dispatching event
+      this.address = detail.label;
+      this.dirty = true;
+      this.requestUpdate();
+    }
+  };
+
   private async onGenerateClick() {
-    // Emit same event; consumers can call OrsApi.createIsochronesByAddress if they prefer.
-    this.emitChange();
+    const detail = this.emitChange();
+    this.dispatchEvent(
+      new CustomEvent("isochrones-generate", {
+        detail,
+        bubbles: true,
+        composed: true,
+      })
+    );
+    this.dirty = false;
   }
 
   render() {
@@ -152,7 +180,12 @@ export class OrsIsochronesPanel extends LitElement {
           />
         </label>
 
-        <button @click=${this.onGenerateClick}>Generuj izochronę</button>
+        <div>
+          ${this.dirty
+            ? html`<div style="color: #b36f00; margin-bottom:8px;">Parametry zmienione — kliknij "Generuj izochronę", aby zmiany weszły w życie.</div>`
+            : null}
+          <button @click=${this.onGenerateClick}>Generuj izochronę</button>
+        </div>
       </div>
     `;
   }
