@@ -32,6 +32,10 @@ export class OrsMap extends LitElement {
     opacity: 0,
   });
 
+  @state() isochroneCenterMarker: L.Marker = new L.Marker([0, 0], {
+    opacity: 0,
+  });
+
   @state() currentLatLng?: L.LatLng;
   @state() orsApi: OrsApi = new OrsApi();
 
@@ -78,6 +82,9 @@ export class OrsMap extends LitElement {
   private lastIsochroneParams?: {
   range: number;
   interval: number;
+  profile?: string;
+  rangeType?: string;
+  address?: string;
 };
 
 
@@ -260,6 +267,10 @@ window.addEventListener(
 _onIsochroneCenterSet = (): void => {
   this.contextMenu?.close();
 
+  if (this.currentLatLng) {
+    this.isochroneCenterMarker.setLatLng(this.currentLatLng).setOpacity(1);
+  }
+
   // jeśli użytkownik już ruszał suwakami
   if (this.currentLatLng && this.lastIsochroneParams) {
     // symulujemy „zmianę suwaka”
@@ -353,15 +364,18 @@ _onIsochronesChange = (e: Event): void => {
   
   const detail = (e as CustomEvent).detail;
 
-  this.lastIsochroneParams = {
+    this.lastIsochroneParams = {
   range: detail.range,
-  interval: detail.interval
+  interval: detail.interval,
+  profile: detail.profile,
+  rangeType: detail.rangeType,
+  address: detail.address
 };
 
 
-  if (!this.currentLatLng) return;
+  
 
-  // debounce
+    // debounce
   if (this.isochroneDebounceTimer) {
     clearTimeout(this.isochroneDebounceTimer);
   }
@@ -383,17 +397,52 @@ _onIsochronesChange = (e: Event): void => {
 
     this.isochroneAbortController = new AbortController();
 
+    // show progress overlay
+    render(html`<progress-bar-request></progress-bar-request>`, document.body);
+
     try {
+      let centerLatLng: L.LatLng | undefined = this.currentLatLng;
+
+      if (detail.address) {
+        // geocode address to coordinates
+        try {
+          const feats = await this.orsApi.geocode(detail.address);
+          if (!feats || feats.length === 0) {
+            throw new Error("Nie znaleziono adresu: " + detail.address);
+          }
+
+          const coords = feats[0].geometry.coordinates as [number, number];
+          centerLatLng = new L.LatLng(coords[1], coords[0]);
+          this.currentLatLng = centerLatLng;
+          this.map?.setView(centerLatLng, this.map?.getZoom() ?? 13);
+        } catch (geErr: unknown) {
+          this.renderConnectionNotification(geErr);
+          return;
+        }
+      }
+
+      // if still no center, use map center
+      if (!centerLatLng && this.map) {
+        centerLatLng = this.map.getCenter();
+        this.currentLatLng = centerLatLng;
+      }
+
+      if (!centerLatLng) {
+        this.renderConnectionNotification(
+          new Error("Brak punktu centralnego izochrony")
+        );
+        return;
+      }
+
       const data = await this.orsApi.getIsochrones(
         {
-          location: [
-            this.currentLatLng!.lng,
-            this.currentLatLng!.lat
-          ],
+          location: [centerLatLng.lng, centerLatLng.lat],
           range: detail.range,
-          interval: detail.interval
+          interval: detail.interval,
+          profile: detail.profile,
+          rangeType: detail.rangeType,
         },
-        this.isochroneAbortController.signal
+        this.isochroneAbortController!.signal
       );
 
       this.isochronesLayer?.render(data);
@@ -401,6 +450,11 @@ _onIsochronesChange = (e: Event): void => {
       // ignorujemy abort
       if (err.name !== "AbortError") {
         this.renderConnectionNotification(err);
+      }
+    } finally {
+      const overlay = document.querySelector('progress-bar-request');
+      if (overlay && overlay.parentElement) {
+        overlay.parentElement.removeChild(overlay);
       }
     }
   }, 600); // debounce 600 ms
@@ -450,6 +504,7 @@ window.removeEventListener(
     this.markerGreen.addTo(this.map!).setIcon(this.startIcon);
     this.markerRed.addTo(this.map!).setIcon(this.endIcon);
     this.searchMarker.addTo(this.map!).setIcon(this.startIcon);
+    this.isochroneCenterMarker.addTo(this.map!).setIcon(this.endIcon);
 
     this.addListeners();
   }

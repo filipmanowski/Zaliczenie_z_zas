@@ -1,18 +1,31 @@
 import { LitElement, html, css } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import "@vaadin/text-field";
+import "@vaadin/vertical-layout";
+import { OrsApi } from "../../ors-api/ors-api";
 
 @customElement("ors-isochrones-panel")
 export class OrsIsochronesPanel extends LitElement {
-  @state() rangeKm = 15;
-  @state() intervalKm = 3;
+  @state() rawRange = 15; // km or minutes depending on rangeType
+  @state() rawInterval = 3; // km or minutes depending on rangeType
+  @state() profile: string = "driving-car";
+  @state() rangeType: "distance" | "time" = "distance";
+  @state() address: string = "";
+
+  private api = new OrsApi();
 
   private emitChange() {
+    const detailRange = this.rangeType === "distance" ? this.rawRange * 1000 : this.rawRange * 60; // minutes->seconds
+    const detailInterval = this.rangeType === "distance" ? this.rawInterval * 1000 : this.rawInterval * 60;
+
     this.dispatchEvent(
       new CustomEvent("isochrones-change", {
         detail: {
-          range: this.rangeKm * 1000,
-          interval: this.intervalKm * 1000,
+          range: detailRange,
+          interval: detailInterval,
+          profile: this.profile,
+          rangeType: this.rangeType,
+          address: this.address || undefined,
         },
         bubbles: true,
         composed: true,
@@ -22,51 +35,124 @@ export class OrsIsochronesPanel extends LitElement {
 
   private onRangeInput(e: Event) {
     const value = Number((e.target as HTMLInputElement).value);
-    this.rangeKm = value;
+    const max = this.getMaxRangeForType();
+    this.rawRange = Math.min(value, max);
 
-    if (this.intervalKm > this.rangeKm) {
-      this.intervalKm = this.rangeKm;
+    if (this.rawInterval > this.rawRange) {
+      this.rawInterval = this.rawRange;
     }
 
     this.emitChange();
   }
 
   private onIntervalInput(e: Event) {
-    this.intervalKm = Number((e.target as HTMLInputElement).value);
+    this.rawInterval = Number((e.target as HTMLInputElement).value);
+    this.emitChange();
+  }
+
+  private onProfileChange(e: Event) {
+    this.profile = (e.target as HTMLSelectElement).value;
+    this.emitChange();
+  }
+
+  private onRangeTypeChange(e: Event) {
+    const newType = (e.target as HTMLSelectElement).value as "distance" | "time";
+    // convert current values to reasonable defaults when switching units
+    if (this.rangeType !== newType) {
+      if (newType === "distance") {
+        // assume rawRange/rawInterval currently minutes -> convert roughly (minutes -> km guess), but keep values reasonable
+        this.rawRange = Math.max(2, Math.round(this.rawRange / 5));
+        this.rawInterval = Math.max(1, Math.round(this.rawInterval / 5));
+      } else {
+        // switching to time: scale up
+        this.rawRange = Math.max(5, Math.round(this.rawRange * 5));
+        this.rawInterval = Math.max(1, Math.round(this.rawInterval * 5));
+      }
+    }
+
+    this.rangeType = newType;
+    // clamp to allowed max for new type
+    const max = this.getMaxRangeForType();
+    if (this.rawRange > max) this.rawRange = max;
+    if (this.rawInterval > this.rawRange) this.rawInterval = this.rawRange;
+    this.emitChange();
+  }
+
+  private getMaxRangeForType(): number {
+    // distance: km max 50 (previous default), time: minutes max 60 to avoid ORS range limit
+    return this.rangeType === "distance" ? 50 : 60;
+  }
+
+  private onAddressInput(e: Event) {
+    this.address = (e.target as HTMLInputElement).value;
+    // notify map about the entered address (debounced on map side)
+    this.dispatchEvent(
+      new CustomEvent("isochrone-address", {
+        detail: { address: this.address },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  private async onGenerateClick() {
+    // Emit same event; consumers can call OrsApi.createIsochronesByAddress if they prefer.
     this.emitChange();
   }
 
   render() {
     return html`
       <div class="panel">
+        <label>
+          Profil:
+          <select @change=${this.onProfileChange} .value=${this.profile}>
+            ${this.api
+              .getAvailableProfiles()
+              .map((p) => html`<option value=${p.value}>${p.label}</option>`)}
+          </select>
+        </label>
+
+        <label>
+          Tryb izochrony:
+          <select @change=${this.onRangeTypeChange} .value=${this.rangeType}>
+            ${this.api
+              .getRangeTypeOptions()
+              .map((o) => html`<option value=${o.value}>${o.label}</option>`)}
+          </select>
+        </label>
+
         <vaadin-text-field
           label="Adres (opcjonalnie)"
           placeholder="np. Lublin, Plac Litewski"
+          .value=${this.address}
+          @input=${this.onAddressInput}
         ></vaadin-text-field>
 
         <label>
-          Zasięg (km): <strong>${this.rangeKm}</strong>
+          Zasięg (${this.rangeType === "distance" ? "km" : "minuty"}): <strong>${this.rawRange}</strong>
           <input
             type="range"
-            min="2"
-            max="15"
+            min=${this.rangeType === "distance" ? 2 : 1}
+            max=${this.rangeType === "distance" ? 50 : 60}
             step="1"
-            .value=${String(this.rangeKm)}
+            .value=${String(this.rawRange)}
             @input=${this.onRangeInput}
           />
         </label>
 
         <label>
-          Interwał (km): <strong>${this.intervalKm}</strong>
+          Interwał (${this.rangeType === "distance" ? "km" : "minuty"}): <strong>${this.rawInterval}</strong>
           <input
             type="range"
             min="1"
-            max=${this.rangeKm}
+            max=${this.rawRange}
             step="1"
-            .value=${String(this.intervalKm)}
+            .value=${String(this.rawInterval)}
             @input=${this.onIntervalInput}
           />
         </label>
+
+        <button @click=${this.onGenerateClick}>Generuj izochronę</button>
       </div>
     `;
   }
