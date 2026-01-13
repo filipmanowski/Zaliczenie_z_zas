@@ -87,6 +87,8 @@ export class OrsMap extends LitElement {
   address?: string;
 };
   private addressDebounceTimer?: number;
+  // if true, user recently changed the isochrone center marker and auto-generation should be suppressed
+  private markerRecentlySet: boolean = false;
 
 
 
@@ -258,6 +260,10 @@ export class OrsMap extends LitElement {
   this._onIsochronesChange as EventListener
 );
     window.addEventListener(
+      "isochrones-params-changed",
+      this._onIsochroneParamsChanged as EventListener
+    );
+    window.addEventListener(
       "isochrone-address",
       this._onIsochroneAddress as EventListener
     );
@@ -276,8 +282,10 @@ _onIsochroneCenterSet = (): void => {
     this.isochroneCenterMarker.setLatLng(this.currentLatLng).setOpacity(1);
   }
 
-  // jeśli użytkownik już ruszał suwakami
-  // do not auto-generate here; user must click 'Generuj izochronę'
+  // mark that user explicitly set/moved the isochrone center - require explicit regenerate
+  this.markerRecentlySet = true;
+  // notify panels that center was changed (so they can show the 'need to generate' message)
+  window.dispatchEvent(new CustomEvent("isochrone-center-changed"));
 };
 
 _onIsochroneAddress = (e: Event): void => {
@@ -300,11 +308,22 @@ _onIsochroneAddress = (e: Event): void => {
       this.isochroneCenterMarker.setLatLng(latlng).setOpacity(1);
       this.map?.setView(latlng, this.map?.getZoom() ?? 13);
 
-      // do not auto-generate on address change; user must click 'Generuj izochronę'
+      // user set the isochrone center by address — require explicit regenerate
+      this.markerRecentlySet = true;
+      window.dispatchEvent(new CustomEvent("isochrone-center-changed"));
     } catch (err: unknown) {
       this.renderConnectionNotification(err);
     }
   }, 600);
+};
+
+_onIsochroneParamsChanged = (e: Event): void => {
+  const detail = (e as CustomEvent).detail;
+  // if the user recently changed the isochrone center, require explicit generate
+  if (this.markerRecentlySet) return;
+
+  // otherwise forward to the normal generation flow
+  this._onIsochronesChange(new CustomEvent("isochrones-generate", { detail }));
 };
 
 
@@ -488,6 +507,10 @@ _onIsochronesChange = (e: Event): void => {
       );
 
       this.isochronesLayer?.render(data);
+      // generation succeeded — clear the "marker recently set" flag so future param changes auto-generate
+      this.markerRecentlySet = false;
+      // notify panels that generation finished so they can clear their dirty state
+      window.dispatchEvent(new CustomEvent("isochrones-generated"));
 
       // after rendering, try to get reverse geocode feature for center
       try {
@@ -515,11 +538,11 @@ _onIsochronesChange = (e: Event): void => {
           }
         }
 
-        if (!hasLocality) {
-          this.renderConnectionNotification(
-            new Error("W miejscu znacznika nie można wskazać dokładnego adresu położenia.")
-          );
-        }
+        // if (!hasLocality) {
+        //   this.renderConnectionNotification(
+        //     new Error("W miejscu znacznika nie można wskazać dokładnego adresu położenia.")
+        //   );
+        // }
       } catch (e) {
         // ignore reverse geocode errors
       }
@@ -530,7 +553,7 @@ _onIsochronesChange = (e: Event): void => {
 
         const msg = err && err.message ? String(err.message) : "";
         if (
-          msg.includes("ORS Isochrone error: 500") ||
+          msg.includes("ORS Isochrone error") ||
           msg.includes("Unable to build an isochrone map")
         ) {
           this.renderConnectionNotification(
@@ -571,6 +594,11 @@ _onIsochronesChange = (e: Event): void => {
   this._onIsochronesChange as EventListener
   
 );
+
+        window.removeEventListener(
+          "isochrones-params-changed",
+          this._onIsochroneParamsChanged as EventListener
+        );
 
 window.removeEventListener(
   "isochrone-center-set",

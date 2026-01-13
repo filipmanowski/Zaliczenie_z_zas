@@ -112,7 +112,7 @@ export class OrsApi {
       }
 
       // ensure the final requested range is included (e.g. interval=8km, range=11km -> include 8km and 11km)
-      const last = temp.length ? temp[temp.length - 1] : 0;
+      const last = temp.length ? (temp[temp.length - 1] as number) : 0;
       if (last < req.range) {
         if (temp.length < MAX_ISOCHRONES) {
           temp.push(req.range);
@@ -128,11 +128,18 @@ export class OrsApi {
       if (ranges.length > MAX_ISOCHRONES) {
         // keep first (MAX_ISOCHRONES-1) and final range
         const first = ranges.slice(0, MAX_ISOCHRONES - 1);
-        const final = ranges[ranges.length - 1];
+        const final = ranges[ranges.length - 1] as number;
         ranges = [...first, final];
       }
     } else {
       ranges = [req.range];
+    }
+
+    // Enforce a hard distance cap of 15km when using distance ranges
+    if (rangeType === 'distance') {
+      const MAX_METERS = 15000;
+      ranges = Array.from(new Set(ranges.map(r => (r > MAX_METERS ? MAX_METERS : r)))).sort((a,b)=>a-b);
+      if (ranges.length === 0) ranges = [Math.min(req.range, MAX_METERS)];
     }
 
     const body: any = {
@@ -249,6 +256,13 @@ const response = await fetch(url, fetchOptions);
       // ORS oczekuje sekund przy range_type='time', UI używa minut
       rangeVal = Math.round(rangeVal * 60);
       intervalVal = Math.round(intervalVal * 60);
+    }
+
+    // enforce 15km max for distance mode (UI may provide larger values)
+    if (rangeType === 'distance') {
+      const MAX_METERS = 15000;
+      if (rangeVal > MAX_METERS) rangeVal = MAX_METERS;
+      if (intervalVal > rangeVal) intervalVal = rangeVal;
     }
 
     const req: IsochroneRequest = {
