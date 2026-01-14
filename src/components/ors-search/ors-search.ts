@@ -116,5 +116,29 @@ export class OrsSearchTab extends LitElement {
     vaadin-item:hover {
       background-color: #f4f4f4;
     }
+
+    /* Slightly nicer visuals */
+    vaadin-text-field {
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(16,24,40,0.04);
+      background: white;
+    }
+
+    vaadin-list-box {
+      border-radius: 8px;
+      box-shadow: 0 6px 16px rgba(16,24,40,0.08);
+      border: 1px solid #e6e9ee;
+    }
+
+    vaadin-item {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(0,0,0,0.04);
+    }
+
+    vaadin-item:hover {
+      background: #f7fbff;
+    }
+
+    vaadin-icon[slot="suffix"] { cursor: pointer; color: #3a76d2; }
   `;
 }
